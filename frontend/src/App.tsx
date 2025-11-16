@@ -5,7 +5,7 @@ import PollList from './components/PollList'
 import CreatePoll from './components/CreatePoll'
 import VoteModal from './components/VoteModal'
 import AccountSelector from './components/AccountSelector'
-import { CONTRACT_ADDRESS, loadContractAbi, NODE_CONFIGS, NodeType, DEFAULT_NODE } from './config'
+import { CONTRACT_ADDRESSES, loadContractAbi, NODE_CONFIGS, NodeType, DEFAULT_NODE } from './config'
 import { AccountInfo, setApiSigner } from './utils/polkadot'
 import { initDatabase, debugDatabase, getAllPollMetadata } from './utils/database'
 import { logger } from './utils/logger'
@@ -186,9 +186,22 @@ function App() {
           logger.blockchain(`Cadena: ${chain}, Bloque: #${blockNumber}`, { chain: chain.toString(), blockNumber })
           
           const contractAbi = await loadContractAbi()
-          const contractInstance = new ContractPromise(apiInstance, contractAbi, CONTRACT_ADDRESS)
-          setContract(contractInstance)
-          logger.success('Contrato cargado', { address: CONTRACT_ADDRESS }, 'contract')
+          const contractAddress = CONTRACT_ADDRESSES[nodeType]
+          
+          let contractInstance: ContractPromise
+          if (!contractAddress) {
+            logger.warning(`Contrato no deployado en ${NODE_CONFIGS[nodeType].name}`, {
+              nodeType,
+              nodeName: NODE_CONFIGS[nodeType].name
+            }, 'contract')
+            // Crear instancia con dirección vacía para evitar errores, pero no permitir transacciones
+            contractInstance = new ContractPromise(apiInstance, contractAbi, '0x0000000000000000000000000000000000000000')
+            setContract(contractInstance)
+          } else {
+            contractInstance = new ContractPromise(apiInstance, contractAbi, contractAddress)
+            setContract(contractInstance)
+            logger.success('Contrato cargado', { address: contractAddress, node: NODE_CONFIGS[nodeType].name }, 'contract')
+          }
           
           // Exponer funciones de sincronización con el contrato
           if (typeof window !== 'undefined') {
@@ -364,6 +377,7 @@ function App() {
           contract={contract}
           api={api}
           selectedAccount={selectedAccount}
+          nodeType={nodeType}
           onClose={() => setShowCreatePoll(false)}
         />
       )}

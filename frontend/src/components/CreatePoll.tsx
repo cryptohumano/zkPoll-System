@@ -3,16 +3,18 @@ import { ContractPromise } from '@polkadot/api-contract'
 import { ApiPromise } from '@polkadot/api'
 import { AccountInfo } from '../utils/polkadot'
 import { savePollMetadata } from '../utils/database'
+import { NODE_CONFIGS, NodeType } from '../config'
 import './CreatePoll.css'
 
 interface CreatePollProps {
   contract: ContractPromise
   api: ApiPromise | null
   selectedAccount: AccountInfo | null
+  nodeType?: NodeType
   onClose: () => void
 }
 
-export default function CreatePoll({ contract, api, selectedAccount, onClose }: CreatePollProps) {
+export default function CreatePoll({ contract, api, selectedAccount, nodeType = 'ink-local', onClose }: CreatePollProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [maxOptions, setMaxOptions] = useState(2)
@@ -36,6 +38,14 @@ export default function CreatePoll({ contract, api, selectedAccount, onClose }: 
     setLoading(true)
     setError(null)
     setSuccess(false)
+
+    // Verificar si el contrato está deployado en esta red
+    const nodeConfig = NODE_CONFIGS[nodeType]
+    if (!nodeConfig.contractDeployed) {
+      setError(`⚠️ El contrato no está deployado en ${nodeConfig.name}. Por favor, usa la red local (ink-node) para crear polls.`)
+      setLoading(false)
+      return
+    }
 
     try {
       // Merkle root temporal (en producción se calcularía correctamente)
@@ -545,7 +555,16 @@ export default function CreatePoll({ contract, api, selectedAccount, onClose }: 
       }
     } catch (err: any) {
       console.error('Error creando poll:', err)
-      setError(err.message || 'Error al crear la encuesta')
+      let errorMessage = err.message || 'Error al crear la encuesta'
+      
+      // Mensajes de error más claros
+      if (errorMessage.includes('1010') || errorMessage.includes('Inability to pay')) {
+        errorMessage = `⚠️ No se pueden pagar las fees. ${nodeConfig.contractDeployed ? 'Asegúrate de tener fondos suficientes.' : `El contrato no está deployado en ${nodeConfig.name}. Usa la red local (ink-node) para crear polls.`}`
+      } else if (errorMessage.includes('Invalid Transaction')) {
+        errorMessage = `⚠️ Transacción inválida. ${nodeConfig.contractDeployed ? 'Verifica que la cuenta tenga fondos suficientes.' : `El contrato no está deployado en ${nodeConfig.name}. Usa la red local (ink-node) para crear polls.`}`
+      }
+      
+      setError(errorMessage)
       setLoading(false)
     }
   }

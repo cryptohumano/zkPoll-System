@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ContractPromise } from '@polkadot/api-contract'
-import { AccountInfo } from '../utils/polkadot'
+import { AccountInfo, getDevAccounts } from '../utils/polkadot'
+import { logger } from '../utils/logger'
 import './VoteModal.css'
 
 interface VoteModalProps {
@@ -18,20 +19,45 @@ export default function VoteModal({ contract, pollId, selectedAccount, onRequest
   const [voting, setVoting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [tallies, setTallies] = useState<number[]>([])
+  const [queryAddress, setQueryAddress] = useState<string | null>(null)
+
+  // Obtener una dirección AccountId32 válida para queries
+  useEffect(() => {
+    const initQueryAddress = async () => {
+      try {
+        const devAccounts = await getDevAccounts()
+        if (devAccounts.length > 0) {
+          setQueryAddress(devAccounts[0].address)
+          logger.debug('VoteModal: Dirección de query configurada', { address: devAccounts[0].address }, 'api')
+        }
+      } catch (e) {
+        logger.warning('VoteModal: No se pudo obtener dirección de query', { error: e }, 'api')
+      }
+    }
+    initQueryAddress()
+  }, [contract])
 
   useEffect(() => {
-    loadPollData()
-  }, [pollId])
+    if (queryAddress) {
+      loadPollData()
+    }
+  }, [pollId, queryAddress])
 
   const loadPollData = async () => {
+    if (!queryAddress) {
+      logger.debug('VoteModal: Esperando dirección de query...', null, 'api')
+      return
+    }
+    
     try {
       const gasLimit = contract.abi.registry.createType('WeightV2', {
         refTime: 100000000000,
         proofSize: 1000000
       }) as any
       
+      logger.debug(`VoteModal: Consultando getPoll(${pollId})`, { pollId, address: queryAddress }, 'contract')
       const result = await contract.query.getPoll(
-        contract.address,
+        queryAddress,
         { value: 0, gasLimit },
         pollId
       )
@@ -58,7 +84,7 @@ export default function VoteModal({ contract, pollId, selectedAccount, onRequest
           }) as any
           
           const tallyResult = await contract.query.getVoteTally(
-            contract.address,
+            queryAddress,
             { value: 0, gasLimit: gasLimitTally },
             pollId,
             i
