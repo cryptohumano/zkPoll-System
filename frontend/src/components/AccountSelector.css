@@ -1,0 +1,132 @@
+.account-selector {
+  max-width: 500px;
+}
+
+.account-selector-content {
+  padding: 20px 0;
+}
+
+.select-hint {
+  color: #666;
+  margin-bottom: 20px;
+  font-size: 0.95rem;
+}
+
+.accounts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.account-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px;
+  border: 2px solid #e0e0e0;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: #fafafa;
+}
+
+.account-item:hover {
+  border-color: #667eea;
+  background: #f8f9ff;
+  transform: translateX(5px);
+}
+
+.account-item.dev-account {
+  border-color: #4caf50;
+  background: #f1f8f4;
+}
+
+.account-item.dev-account:hover {
+  border-color: #45a049;
+  background: #e8f5e9;
+}
+
+.dev-badge {
+  display: inline-block;
+  background: #4caf50;
+  color: white;
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: 8px;
+  font-weight: bold;
+}
+
+.account-info {
+  flex: 1;
+}
+
+.account-name {
+  font-weight: bold;
+  color: #333;
+  margin-bottom: 5px;
+  font-size: 1.05rem;
+}
+
+.account-address {
+  color: #666;
+  font-family: monospace;
+  font-size: 0.9rem;
+  margin-bottom: 3px;
+}
+
+.account-source {
+  color: #999;
+  font-size: 0.85rem;
+  text-transform: capitalize;
+}
+
+.account-select-arrow {
+  color: #667eea;
+  font-size: 1.5rem;
+  font-weight: bold;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+.error-message {
+  text-align: center;
+  padding: 30px;
+  background: #ffebee;
+  border-radius: 10px;
+  border-left: 4px solid #c62828;
+}
+
+.error-message p {
+  color: #c62828;
+  margin-bottom: 15px;
+}
+
+.btn-retry {
+  background: #667eea;
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: bold;
+}
+
+.btn-retry:hover {
+  background: #5568d3;
+}
+
+.no-accounts {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+.no-accounts p {
+  margin-bottom: 10px;
+}
+
