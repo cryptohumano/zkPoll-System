@@ -153,6 +153,7 @@ function App() {
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null)
   const [nodeType, setNodeType] = useState<NodeType>(DEFAULT_NODE)
   const [showLogs, setShowLogs] = useState(false)
+  const [pollRefreshTrigger, setPollRefreshTrigger] = useState(0)
 
   useEffect(() => {
     const initialize = async () => {
@@ -368,6 +369,7 @@ function App() {
           <PollList 
             contract={contract} 
             onVoteClick={setSelectedPoll}
+            refreshTrigger={pollRefreshTrigger}
           />
         )}
       </main>
@@ -379,6 +381,18 @@ function App() {
           selectedAccount={selectedAccount}
           nodeType={nodeType}
           onClose={() => setShowCreatePoll(false)}
+          onPollCreated={() => {
+            // Incrementar el trigger para forzar recarga
+            logger.info('📢 Callback onPollCreated ejecutado, incrementando refreshTrigger', null, 'app')
+            setPollRefreshTrigger(prev => {
+              const newValue = prev + 1
+              logger.info('🔄 refreshTrigger actualizado', { 
+                previous: prev, 
+                new: newValue 
+              }, 'app')
+              return newValue
+            })
+          }}
         />
       )}
 

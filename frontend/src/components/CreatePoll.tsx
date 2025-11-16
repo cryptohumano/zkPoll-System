@@ -4,6 +4,7 @@ import { ApiPromise } from '@polkadot/api'
 import { AccountInfo } from '../utils/polkadot'
 import { savePollMetadata } from '../utils/database'
 import { NODE_CONFIGS, NodeType } from '../config'
+import { logger } from '../utils/logger'
 import './CreatePoll.css'
 
 interface CreatePollProps {
@@ -12,9 +13,10 @@ interface CreatePollProps {
   selectedAccount: AccountInfo | null
   nodeType?: NodeType
   onClose: () => void
+  onPollCreated?: () => void // Callback cuando se crea una poll exitosamente
 }
 
-export default function CreatePoll({ contract, api, selectedAccount, nodeType = 'ink-local', onClose }: CreatePollProps) {
+export default function CreatePoll({ contract, api, selectedAccount, nodeType = 'ink-local', onClose, onPollCreated }: CreatePollProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [maxOptions, setMaxOptions] = useState(2)
@@ -104,7 +106,95 @@ export default function CreatePoll({ contract, api, selectedAccount, nodeType = 
         const { getPairForAddress } = await import('../utils/polkadot')
         const pair = await getPairForAddress(selectedAccount.address)
         await result.signAndSend(pair, async (result: any) => {
+          logger.debug('📨 Estado de transacción recibido', { 
+            isInBlock: result.status.isInBlock,
+            isFinalized: result.status.isFinalized,
+            status: result.status.type,
+            hasDispatchError: !!result.dispatchError
+          }, 'contract')
+          
+          // Verificar si la transacción falló
+          if (result.dispatchError) {
+            let errorMessage = 'La transacción falló en la cadena.'
+            
+            try {
+              // Intentar decodificar el error para obtener un mensaje más útil
+              if (api && result.dispatchError) {
+                const decodedError = api.registry.findMetaError(result.dispatchError)
+                if (decodedError) {
+                  errorMessage = `Error: ${decodedError.section}.${decodedError.name}`
+                  logger.error('❌ Transacción falló (decodificado)', { 
+                    section: decodedError.section,
+                    name: decodedError.name,
+                    docs: decodedError.docs,
+                    error: result.dispatchError
+                  }, 'contract')
+                  
+                  // Mensajes específicos para errores comunes
+                  if (decodedError.section === 'contracts') {
+                    if (decodedError.name === 'OutOfGas') {
+                      errorMessage = 'Error: La transacción se quedó sin gas. Intenta aumentar el límite de gas.'
+                    } else if (decodedError.name === 'CodeNotFound') {
+                      errorMessage = 'Error: Código del contrato no encontrado. Verifica que el contrato esté desplegado.'
+                    } else if (decodedError.name === 'NotCallable') {
+                      errorMessage = 'Error: El método del contrato no es invocable. Verifica los parámetros.'
+                    } else if (decodedError.name === 'Trap') {
+                      errorMessage = 'Error: El contrato ejecutó una trampa (trap). Verifica los parámetros de entrada.'
+                    } else if (decodedError.name === 'StorageDepositLimitExceeded') {
+                      errorMessage = 'Error: Límite de depósito de almacenamiento excedido.'
+                    } else {
+                      errorMessage = `Error del contrato: ${decodedError.name}. ${decodedError.docs || ''}`
+                    }
+                  } else if (decodedError.section === 'system') {
+                    if (decodedError.name === 'InvalidTransaction') {
+                      errorMessage = 'Error: Transacción inválida. Verifica que tengas fondos suficientes.'
+                    } else {
+                      errorMessage = `Error del sistema: ${decodedError.name}. ${decodedError.docs || ''}`
+                    }
+                  }
+                } else {
+                  // Si no se puede decodificar, intentar obtener información del error
+                  const errorStr = result.dispatchError.toString()
+                  logger.error('❌ Transacción falló (no decodificado)', { 
+                    error: errorStr,
+                    events: result.events
+                  }, 'contract')
+                  errorMessage = `Error desconocido: ${errorStr}`
+                }
+              }
+            } catch (decodeError: any) {
+              logger.error('❌ Error decodificando dispatchError', { 
+                decodeError: decodeError.message,
+                originalError: result.dispatchError
+              }, 'contract')
+              errorMessage = 'La transacción falló. Verifica los logs para más detalles.'
+            }
+            
+            setError(errorMessage)
+            setLoading(false)
+            return
+          }
+          
+          // Verificar eventos de error
+          if (result.events) {
+            for (const eventRecord of result.events) {
+              const event = eventRecord.event
+              if (event && event.section === 'system' && event.method === 'ExtrinsicFailed') {
+                logger.error('❌ Transacción falló (ExtrinsicFailed)', { 
+                  event: event.data
+                }, 'contract')
+                setError('La transacción falló en la cadena. Verifica que tengas suficientes fondos y permisos.')
+                setLoading(false)
+                return
+              }
+            }
+          }
+          
           if (result.status.isInBlock || result.status.isFinalized) {
+            logger.info('✅ Transacción confirmada en bloque', { 
+              isInBlock: result.status.isInBlock,
+              isFinalized: result.status.isFinalized
+            }, 'contract')
             // Obtener información del bloque
             if (result.status.isInBlock && api) {
               try {
@@ -253,23 +343,57 @@ export default function CreatePoll({ contract, api, selectedAccount, nodeType = 
             // Esto es menos confiable pero puede funcionar si solo hay una transacción
             if (pollId === 0 && contract) {
               try {
-                console.log('🔄 Intentando obtener pollId del total de polls...')
+                logger.debug('🔄 Intentando obtener pollId del total de polls...', null, 'contract')
+                // Obtener una dirección AccountId32 válida para queries (no usar contract.address que es H160)
+                const { getDevAccounts } = await import('../utils/polkadot')
+                const devAccounts = await getDevAccounts()
+                const queryAddress = devAccounts.length > 0 ? devAccounts[0].address : null
+                
+                if (!queryAddress) {
+                  logger.warning('No se pudo obtener dirección AccountId32 para query', null, 'contract')
+                  throw new Error('No se pudo obtener dirección de query')
+                }
+                
                 const gasLimit = contract.abi.registry.createType('WeightV2', {
                   refTime: 100000000000,
                   proofSize: 1000000
                 }) as any
+                
+                // Esperar un poco para que la transacción se procese
+                await new Promise(resolve => setTimeout(resolve, 2000))
+                
                 const totalResult = await contract.query.getTotalPolls(
-                  contract.address,
+                  queryAddress,
                   { value: 0, gasLimit }
                 )
+                
+                // Parsear el resultado igual que en PollList.tsx
                 const output = totalResult.output
-                console.log('📊 Total de polls obtenido:', output)
-                if (output && typeof output === 'object' && 'toNumber' in output) {
-                  pollId = (output as any).toNumber()
-                  console.log(`✅ PollId obtenido del total de polls: ${pollId}`)
+                let total = 0
+                
+                if (output && typeof output === 'object' && 'toHuman' in output) {
+                  const humanOutput = (output as any).toHuman()
+                  if (humanOutput && typeof humanOutput === 'object') {
+                    if ('Ok' in humanOutput) {
+                      const okValue = humanOutput.Ok
+                      total = typeof okValue === 'string' ? Number(okValue) || 0 : 
+                              typeof okValue === 'number' ? okValue : 0
+                    } else if ('ok' in humanOutput) {
+                      const okValue = humanOutput.ok
+                      total = typeof okValue === 'string' ? Number(okValue) || 0 : 
+                              typeof okValue === 'number' ? okValue : 0
+                    }
+                  }
                 }
-              } catch (e) {
-                console.warn('Error obteniendo pollId del total:', e)
+                
+                if (total > 0) {
+                  pollId = total
+                  logger.info(`✅ PollId obtenido del total de polls: ${pollId}`, { pollId }, 'contract')
+                } else {
+                  logger.warning('No se pudo obtener pollId del total de polls', { total }, 'contract')
+                }
+              } catch (e: any) {
+                logger.warning('Error obteniendo pollId del total', { error: e.message }, 'contract')
               }
             }
 
@@ -321,15 +445,126 @@ export default function CreatePoll({ contract, api, selectedAccount, nodeType = 
 
             setLoading(false)
             setSuccess(true)
+            
+            // Notificar inmediatamente que se creó una poll (el sistema de verificación esperará)
+            // IMPORTANTE: Llamar al callback incluso si pollId es 0, porque el sistema de verificación
+            // puede detectar el cambio en getTotalPolls()
+            logger.info('📢 Preparando notificación de poll creada', { 
+              pollId,
+              hasCallback: !!onPollCreated 
+            }, 'contract')
+            
+            if (onPollCreated) {
+              try {
+                logger.info('📢 Ejecutando callback onPollCreated', { pollId }, 'contract')
+                onPollCreated()
+                logger.success('✅ Callback onPollCreated ejecutado exitosamente', null, 'contract')
+              } catch (e) {
+                logger.error('❌ Error ejecutando callback onPollCreated', e, 'contract')
+              }
+            } else {
+              logger.warning('⚠️ onPollCreated callback no está definido', null, 'contract')
+            }
+            
+            // Cerrar el modal después de un delay
             setTimeout(() => {
               onClose()
-              window.location.reload()
+              // No recargar la página completa, solo cerrar el modal
+              // La recarga se hará automáticamente por el trigger
             }, 2000)
           }
         })
       } else {
         await result.signAndSend(selectedAccount.address, async (result: any) => {
+          logger.debug('📨 Estado de transacción recibido', { 
+            isInBlock: result.status.isInBlock,
+            isFinalized: result.status.isFinalized,
+            status: result.status.type,
+            hasDispatchError: !!result.dispatchError
+          }, 'contract')
+          
+          // Verificar si la transacción falló
+          if (result.dispatchError) {
+            let errorMessage = 'La transacción falló en la cadena.'
+            
+            try {
+              // Intentar decodificar el error para obtener un mensaje más útil
+              if (api && result.dispatchError) {
+                const decodedError = api.registry.findMetaError(result.dispatchError)
+                if (decodedError) {
+                  errorMessage = `Error: ${decodedError.section}.${decodedError.name}`
+                  logger.error('❌ Transacción falló (decodificado)', { 
+                    section: decodedError.section,
+                    name: decodedError.name,
+                    docs: decodedError.docs,
+                    error: result.dispatchError
+                  }, 'contract')
+                  
+                  // Mensajes específicos para errores comunes
+                  if (decodedError.section === 'contracts') {
+                    if (decodedError.name === 'OutOfGas') {
+                      errorMessage = 'Error: La transacción se quedó sin gas. Intenta aumentar el límite de gas.'
+                    } else if (decodedError.name === 'CodeNotFound') {
+                      errorMessage = 'Error: Código del contrato no encontrado. Verifica que el contrato esté desplegado.'
+                    } else if (decodedError.name === 'NotCallable') {
+                      errorMessage = 'Error: El método del contrato no es invocable. Verifica los parámetros.'
+                    } else if (decodedError.name === 'Trap') {
+                      errorMessage = 'Error: El contrato ejecutó una trampa (trap). Verifica los parámetros de entrada.'
+                    } else if (decodedError.name === 'StorageDepositLimitExceeded') {
+                      errorMessage = 'Error: Límite de depósito de almacenamiento excedido.'
+                    } else {
+                      errorMessage = `Error del contrato: ${decodedError.name}. ${decodedError.docs || ''}`
+                    }
+                  } else if (decodedError.section === 'system') {
+                    if (decodedError.name === 'InvalidTransaction') {
+                      errorMessage = 'Error: Transacción inválida. Verifica que tengas fondos suficientes.'
+                    } else {
+                      errorMessage = `Error del sistema: ${decodedError.name}. ${decodedError.docs || ''}`
+                    }
+                  }
+                } else {
+                  // Si no se puede decodificar, intentar obtener información del error
+                  const errorStr = result.dispatchError.toString()
+                  logger.error('❌ Transacción falló (no decodificado)', { 
+                    error: errorStr,
+                    events: result.events
+                  }, 'contract')
+                  errorMessage = `Error desconocido: ${errorStr}`
+                }
+              }
+            } catch (decodeError: any) {
+              logger.error('❌ Error decodificando dispatchError', { 
+                decodeError: decodeError.message,
+                originalError: result.dispatchError
+              }, 'contract')
+              errorMessage = 'La transacción falló. Verifica los logs para más detalles.'
+            }
+            
+            setError(errorMessage)
+            setLoading(false)
+            return
+          }
+          
+          // Verificar eventos de error
+          if (result.events) {
+            for (const eventRecord of result.events) {
+              const event = eventRecord.event
+              if (event && event.section === 'system' && event.method === 'ExtrinsicFailed') {
+                logger.error('❌ Transacción falló (ExtrinsicFailed)', { 
+                  event: event.data
+                }, 'contract')
+                setError('La transacción falló en la cadena. Verifica que tengas suficientes fondos y permisos.')
+                setLoading(false)
+                return
+              }
+            }
+          }
+          
           if (result.status.isInBlock || result.status.isFinalized) {
+            logger.info('✅ Transacción confirmada en bloque', { 
+              isInBlock: result.status.isInBlock,
+              isFinalized: result.status.isFinalized
+            }, 'contract')
             // Obtener información del bloque
             if (result.status.isInBlock && api) {
               try {
@@ -478,23 +713,57 @@ export default function CreatePoll({ contract, api, selectedAccount, nodeType = 
             // Esto es menos confiable pero puede funcionar si solo hay una transacción
             if (pollId === 0 && contract) {
               try {
-                console.log('🔄 Intentando obtener pollId del total de polls...')
+                logger.debug('🔄 Intentando obtener pollId del total de polls...', null, 'contract')
+                // Obtener una dirección AccountId32 válida para queries (no usar contract.address que es H160)
+                const { getDevAccounts } = await import('../utils/polkadot')
+                const devAccounts = await getDevAccounts()
+                const queryAddress = devAccounts.length > 0 ? devAccounts[0].address : null
+                
+                if (!queryAddress) {
+                  logger.warning('No se pudo obtener dirección AccountId32 para query', null, 'contract')
+                  throw new Error('No se pudo obtener dirección de query')
+                }
+                
                 const gasLimit = contract.abi.registry.createType('WeightV2', {
                   refTime: 100000000000,
                   proofSize: 1000000
                 }) as any
+                
+                // Esperar un poco para que la transacción se procese
+                await new Promise(resolve => setTimeout(resolve, 2000))
+                
                 const totalResult = await contract.query.getTotalPolls(
-                  contract.address,
+                  queryAddress,
                   { value: 0, gasLimit }
                 )
+                
+                // Parsear el resultado igual que en PollList.tsx
                 const output = totalResult.output
-                console.log('📊 Total de polls obtenido:', output)
-                if (output && typeof output === 'object' && 'toNumber' in output) {
-                  pollId = (output as any).toNumber()
-                  console.log(`✅ PollId obtenido del total de polls: ${pollId}`)
+                let total = 0
+                
+                if (output && typeof output === 'object' && 'toHuman' in output) {
+                  const humanOutput = (output as any).toHuman()
+                  if (humanOutput && typeof humanOutput === 'object') {
+                    if ('Ok' in humanOutput) {
+                      const okValue = humanOutput.Ok
+                      total = typeof okValue === 'string' ? Number(okValue) || 0 : 
+                              typeof okValue === 'number' ? okValue : 0
+                    } else if ('ok' in humanOutput) {
+                      const okValue = humanOutput.ok
+                      total = typeof okValue === 'string' ? Number(okValue) || 0 : 
+                              typeof okValue === 'number' ? okValue : 0
+                    }
+                  }
                 }
-              } catch (e) {
-                console.warn('Error obteniendo pollId del total:', e)
+                
+                if (total > 0) {
+                  pollId = total
+                  logger.info(`✅ PollId obtenido del total de polls: ${pollId}`, { pollId }, 'contract')
+                } else {
+                  logger.warning('No se pudo obtener pollId del total de polls', { total }, 'contract')
+                }
+              } catch (e: any) {
+                logger.warning('Error obteniendo pollId del total', { error: e.message }, 'contract')
               }
             }
 
@@ -546,9 +815,32 @@ export default function CreatePoll({ contract, api, selectedAccount, nodeType = 
 
             setLoading(false)
             setSuccess(true)
+            
+            // Notificar inmediatamente que se creó una poll (el sistema de verificación esperará)
+            // IMPORTANTE: Llamar al callback incluso si pollId es 0, porque el sistema de verificación
+            // puede detectar el cambio en getTotalPolls()
+            logger.info('📢 Preparando notificación de poll creada', { 
+              pollId,
+              hasCallback: !!onPollCreated 
+            }, 'contract')
+            
+            if (onPollCreated) {
+              try {
+                logger.info('📢 Ejecutando callback onPollCreated', { pollId }, 'contract')
+                onPollCreated()
+                logger.success('✅ Callback onPollCreated ejecutado exitosamente', null, 'contract')
+              } catch (e) {
+                logger.error('❌ Error ejecutando callback onPollCreated', e, 'contract')
+              }
+            } else {
+              logger.warning('⚠️ onPollCreated callback no está definido', null, 'contract')
+            }
+            
+            // Cerrar el modal después de un delay
             setTimeout(() => {
               onClose()
-              window.location.reload()
+              // No recargar la página completa, solo cerrar el modal
+              // La recarga se hará automáticamente por el trigger
             }, 2000)
           }
         })

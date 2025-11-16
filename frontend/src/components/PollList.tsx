@@ -23,9 +23,10 @@ interface Poll {
 interface PollListProps {
   contract: ContractPromise
   onVoteClick: (pollId: number) => void
+  refreshTrigger?: number // Trigger para forzar recarga
 }
 
-export default function PollList({ contract, onVoteClick }: PollListProps) {
+export default function PollList({ contract, onVoteClick, refreshTrigger }: PollListProps) {
   const [polls, setPolls] = useState<Poll[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -58,6 +59,98 @@ export default function PollList({ contract, onVoteClick }: PollListProps) {
       return () => clearInterval(interval)
     }
   }, [contract, queryAddress])
+
+  // Recargar cuando cambie el refreshTrigger (después de crear una poll)
+  useEffect(() => {
+    if (!queryAddress) {
+      logger.debug('Esperando queryAddress para verificación de nueva poll', null, 'contract')
+      return
+    }
+    
+    // Solo ejecutar si refreshTrigger tiene un valor válido (mayor que 0)
+    // Esto evita ejecutarse en el mount inicial cuando refreshTrigger es 0
+    if (!refreshTrigger || refreshTrigger <= 0) {
+      logger.debug('refreshTrigger no válido, saltando verificación', { refreshTrigger }, 'contract')
+      return
+    }
+    
+    logger.info('🔄 Forzando recarga de polls después de crear nueva poll', { 
+      refreshTrigger,
+      queryAddress 
+    }, 'contract')
+    
+    // Función para obtener el total actual de polls
+    const getCurrentTotal = async (): Promise<number> => {
+      try {
+        const total = await getTotalPolls()
+        return total
+      } catch (e) {
+        logger.warning('Error obteniendo total de polls', { error: e }, 'contract')
+        return 0
+      }
+    }
+    
+    let checkInterval: NodeJS.Timeout | null = null
+    let timeoutId: NodeJS.Timeout | null = null
+    
+    // Esperar inicialmente 3 segundos para que la transacción se procese
+    timeoutId = setTimeout(async () => {
+      let attempts = 0
+      const maxAttempts = 20 // Más intentos (40 segundos total)
+      let previousTotalPolls = await getCurrentTotal()
+      
+      logger.debug('Iniciando verificación de nueva poll', { 
+        previousTotalPolls,
+        refreshTrigger 
+      }, 'contract')
+      
+      checkInterval = setInterval(async () => {
+        attempts++
+        const currentTotal = await getCurrentTotal()
+        
+        logger.debug(`Intento ${attempts}/${maxAttempts} verificando nueva poll`, { 
+          attempts, 
+          previousTotalPolls, 
+          currentTotal,
+          increased: currentTotal > previousTotalPolls
+        }, 'contract')
+        
+        // Si el total aumentó, la transacción se confirmó
+        if (currentTotal > previousTotalPolls) {
+          logger.success('✅ Nueva poll detectada! Recargando lista completa...', { 
+            previousTotal: previousTotalPolls, 
+            newTotal: currentTotal,
+            attempts
+          }, 'contract')
+          previousTotalPolls = currentTotal
+          // Recargar la lista completa
+          await loadPolls()
+          if (checkInterval) clearInterval(checkInterval)
+        } else if (attempts >= maxAttempts) {
+          // Si alcanzamos el máximo de intentos, recargar de todas formas
+          logger.info('Alcanzado máximo de intentos, recargando polls de todas formas', { 
+            attempts,
+            previousTotal: previousTotalPolls,
+            currentTotal
+          }, 'contract')
+          await loadPolls()
+          if (checkInterval) clearInterval(checkInterval)
+        } else {
+          // Si aún no se confirmó, recargar para mantener datos actualizados
+          // pero continuar verificando
+          if (attempts % 3 === 0) { // Recargar cada 3 intentos para no saturar
+            await loadPolls()
+          }
+        }
+      }, 2000) // Intentar cada 2 segundos
+    }, 3000) // Esperar 3 segundos antes de empezar a verificar
+    
+    // Cleanup
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId)
+      if (checkInterval) clearInterval(checkInterval)
+    }
+  }, [refreshTrigger, queryAddress])
 
   const loadPolls = async () => {
     if (!queryAddress) {

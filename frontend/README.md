@@ -47,3 +47,4 @@ export const NODE_URL = 'ws://localhost:9944'
 - Para votar en producción, necesitarás generar pruebas ZK válidas usando el circuito Noir
 - Actualmente usa valores mock para las pruebas ZK (solo para desarrollo)
 
+

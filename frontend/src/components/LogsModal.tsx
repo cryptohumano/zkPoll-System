@@ -174,3 +174,4 @@ export default function LogsModal({ isOpen, onClose }: LogsModalProps) {
   )
 }
 
+
