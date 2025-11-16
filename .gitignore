@@ -37,7 +37,11 @@ logs/
 *.tmp
 *.temp
 
+# Binarios (no incluir en git)
+ink-node
+*.bin
 
+# Noir circuit files
 Prover.toml
 Verifier.toml
 *.wasm
